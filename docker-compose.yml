@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: marketplace_postgres
+    environment:
+      POSTGRES_DB: marketplace
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret123
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - marketplace_network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U admin -d marketplace']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache (opcional para sessões)
+  redis:
+    image: redis:7-alpine
+    container_name: marketplace_redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    networks:
+      - marketplace_network
+    command: redis-server --appendonly yes
+
+  # Backend NestJS
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development # Use the development stage from the Dockerfile
+    container_name: ux_software_backend
+    environment:
+      - DATABASE_URL=postgresql://admin:secret123@postgres:5432/marketplace
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=a-very-secret-key-for-jwt
+      - JWT_EXPIRES_IN=1d
+      - PORT=3001 # Default NestJS port
+    ports:
+      - '3001:3001'
+    volumes:
+      - ./backend:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - marketplace_network
+    # The command is defined in the Dockerfile, but can be overridden for dev
+    command: npm run start:dev
+
+  # Frontend Next.js
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ux_software_frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:3001/api/v1
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    networks:
+      - marketplace_network
+    command: npm run dev
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  marketplace_network:
+    driver: bridge
